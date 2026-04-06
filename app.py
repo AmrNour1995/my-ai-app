@@ -15,23 +15,28 @@ st.set_page_config(
     layout="wide"
 )
 
-# ✅ تحديد المسارات بشكل صحيح
+# تحديد المسارات
 SCRIPT_DIR = Path(__file__).resolve().parent
-MODEL_FILE = SCRIPT_DIR / "sentiment_model.pkl"
-VECTORIZER_FILE = SCRIPT_DIR / "tfidf_vectorizer.pkl"
-DATA_FILE = SCRIPT_DIR / "Reviews.csv"  # ✅ إضافة DATA_FILE
+DATA_DIR = SCRIPT_DIR / "archive"
 
-# ✅ التحقق من وجود الملفات قبل أي حاجة
-for f in [DATA_FILE, MODEL_FILE, VECTORIZER_FILE]:
-    if not f.exists():
-        st.error(f"❌ الملف مش موجود: {f.name}")
+# إذا لم يوجد، جرب Desktop\archive
+if not DATA_DIR.exists():
+    DESKTOP = Path.home() / "Desktop" / "archive"
+    if DESKTOP.exists():
+        DATA_DIR = DESKTOP
+    else:
+        st.error("❌ لم أجد مجلد archive مع الملفات المطلوبة")
         st.stop()
+
+MODEL_FILE = DATA_DIR / "sentiment_model.pkl"
+VECTORIZER_FILE = DATA_DIR / "tfidf_vectorizer.pkl"
+DATA_FILE = DATA_DIR / "Reviews.csv"
 
 # تحميل البيانات والنموذج
 @st.cache_data
 def load_data():
     try:
-        df = pd.read_csv(DATA_FILE)  # ✅ DATA_FILE معرّفة دلوقتي
+        df = pd.read_csv(DATA_FILE)
         return df
     except Exception as e:
         st.error(f"خطأ في تحميل البيانات: {e}")
@@ -71,6 +76,7 @@ def main():
     st.title("🧠 تحليل المشاعر للتقييمات")
     st.markdown("---")
 
+    # تحميل البيانات والنموذج
     df = load_data()
     model, vectorizer = load_model()
 
@@ -82,45 +88,57 @@ def main():
 
     with col1:
         st.metric("عدد التقييمات", f"{len(df):,}")
+
     with col2:
         avg_score = df['Score'].mean()
         st.metric("متوسط التقييم", f"{avg_score:.2f}")
+
     with col3:
         positive_reviews = len(df[df['Score'] >= 4])
         st.metric("التقييمات الإيجابية", f"{positive_reviews:,}")
+
     with col4:
         negative_reviews = len(df[df['Score'] < 4])
         st.metric("التقييمات السلبية", f"{negative_reviews:,}")
 
     st.markdown("---")
 
+    # تبويبات
     tab1, tab2, tab3, tab4 = st.tabs(["📊 التحليلات", "📈 الرسوم البيانية", "🔍 التنبؤ", "📋 عينات"])
 
     with tab1:
         st.header("تحليل البيانات الأساسي")
+
+        # توزيع التقييمات
         st.subheader("توزيع التقييمات")
         score_counts = df['Score'].value_counts().sort_index()
         st.bar_chart(score_counts)
 
+        # إحصائيات مفصلة
         st.subheader("إحصائيات مفصلة")
         st.dataframe(df.describe())
 
+        # عينة من البيانات
         st.subheader("عينة من التقييمات")
         st.dataframe(df[['Score', 'Summary', 'Text']].head(10))
 
     with tab2:
         st.header("الرسوم البيانية التفاعلية")
 
+        # توزيع التقييمات
         fig1 = px.histogram(df, x='Score', title='توزيع التقييمات')
         st.plotly_chart(fig1)
 
+        # التقييمات حسب الوقت (إذا كان هناك عمود Time)
         if 'Time' in df.columns:
             df['Date'] = pd.to_datetime(df['Time'], unit='s')
             df['Year'] = df['Date'].dt.year
             yearly_counts = df.groupby('Year').size().reset_index(name='Count')
+
             fig2 = px.line(yearly_counts, x='Year', y='Count', title='عدد التقييمات سنوياً')
             st.plotly_chart(fig2)
 
+        # توزيع طول النصوص
         df['Text_Length'] = df['Text'].str.len()
         fig3 = px.histogram(df, x='Text_Length', title='توزيع طول النصوص')
         st.plotly_chart(fig3)
@@ -158,18 +176,21 @@ def main():
                     st.success("🟢 التقييم العام: إيجابي")
                 else:
                     st.error("🔴 التقييم العام: سلبي")
+
             else:
                 st.warning("من فضلك اكتب نص للتحليل")
 
     with tab4:
         st.header("عينات من التقييمات")
 
+        # عينات إيجابية
         st.subheader("عينات إيجابية")
         positive_samples = df[df['Score'] >= 4][['Score', 'Summary', 'Text']].sample(5)
         for _, row in positive_samples.iterrows():
             with st.expander(f"⭐ {row['Score']} - {row['Summary'][:50]}..."):
                 st.write(row['Text'])
 
+        # عينات سلبية
         st.subheader("عينات سلبية")
         negative_samples = df[df['Score'] < 4][['Score', 'Summary', 'Text']].sample(5)
         for _, row in negative_samples.iterrows():
