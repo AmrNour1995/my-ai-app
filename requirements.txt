@@ -1,6 +1,8 @@
-pandas                                                                                            
-matplotlib                                 
-seaborn                                              
-pathlib                                      
-textblob                                     
-plotly.express
+streamlit
+pandas
+scikit-learn
+joblib
+textblob
+plotly
+seaborn
+matplotlib
