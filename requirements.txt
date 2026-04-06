@@ -1,5 +1,4 @@
-pandas                                             
-import                                               
+pandas                                                                                            
 matplotlib                                 
 seaborn                                              
 pathlib                                      
