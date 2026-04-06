@@ -1,201 +1,112 @@
 import streamlit as st
-import pandas as pd
 import joblib
-import matplotlib.pyplot as plt
-import seaborn as sns
 from pathlib import Path
-from textblob import TextBlob
-import plotly.express as px
-import plotly.graph_objects as go
 
-# إعداد الصفحة
-st.set_page_config(
-    page_title="تحليل المشاعر للتقييمات",
-    page_icon="🧠",
-    layout="wide"
-)
+# 1. إعداد عنوان الصفحة
+st.set_page_config(page_title="محلل مشاعر المراجعات", page_icon="📊")
+st.title("🤖 نظام تحليل المشاعر الذكي")
+st.markdown("أدخل نص التقييم بالإنجليزية وسيقوم النموذج بتوقعه!")
 
-# تحديد المسارات
+# 2. تحديد مسار الملفات
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR / "archive"
+POSSIBLE_DIRS = [
+    SCRIPT_DIR,
+    SCRIPT_DIR / "archive",
+    Path.cwd(),
+    Path.cwd() / "archive",
+]
 
-# إذا لم يوجد، جرب Desktop\archive
-if not DATA_DIR.exists():
-    DESKTOP = Path.home() / "Desktop" / "archive"
-    if DESKTOP.exists():
-        DATA_DIR = DESKTOP
-    else:
-        st.error("❌ لم أجد مجلد archive مع الملفات المطلوبة")
-        st.stop()
+# دالة لاختيار الملف من أي مسار متاح
+def find_asset(filename):
+    tried = []
 
-MODEL_FILE = DATA_DIR / "sentiment_model.pkl"
-VECTORIZER_FILE = DATA_DIR / "tfidf_vectorizer.pkl"
-DATA_FILE = DATA_DIR / "Reviews.csv"
+    # المسارات المباشرة المفترضة
+    for folder in POSSIBLE_DIRS:
+        path = folder / filename
+        tried.append(path)
+        if path.exists():
+            return path, tried
 
-# تحميل البيانات والنموذج
-@st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv(DATA_FILE)
-        return df
-    except Exception as e:
-        st.error(f"خطأ في تحميل البيانات: {e}")
-        return None
+    # البحث في المجلدات الوالدية
+    for root in [SCRIPT_DIR, Path.cwd()]:
+        for parent in [root] + list(root.parents):
+            path = parent / filename
+            tried.append(path)
+            if path.exists():
+                return path, tried
+            archive_path = parent / "archive" / filename
+            tried.append(archive_path)
+            if archive_path.exists():
+                return archive_path, tried
 
+    # البحث في أي مكان داخل المشروع
+    for folder in [SCRIPT_DIR, Path.cwd()]:
+        for path in folder.rglob(filename):
+            tried.append(path)
+            if path.exists():
+                return path, tried
+
+    return None, tried
+
+MODEL_FILE, model_tried = find_asset("sentiment_model.pkl")
+VECTORIZER_FILE, vectorizer_tried = find_asset("tfidf_vectorizer.pkl")
+
+missing_files = []
+if MODEL_FILE is None:
+    missing_files.append("sentiment_model.pkl")
+if VECTORIZER_FILE is None:
+    missing_files.append("tfidf_vectorizer.pkl")
+
+if missing_files:
+    st.error("❌ لم أجد الملفات التالية:")
+    for name in missing_files:
+        st.write(f"- {name}")
+    st.write("\n**المسارات التي تم البحث فيها:**")
+    all_tried = []
+    if MODEL_FILE is None:
+        all_tried += model_tried
+    if VECTORIZER_FILE is None:
+        all_tried += vectorizer_tried
+    for path in all_tried:
+        st.write(f"- {path}")
+    st.write("\n**المسار الحالي للسكريبت:**")
+    st.write(f"- SCRIPT_DIR = {SCRIPT_DIR}")
+    st.write(f"- Path.cwd() = {Path.cwd()}")
+    st.write("\nتأكد من رفع هذه الملفات إلى نفس مجلد `app.py` أو إلى مجلد `archive` داخل نفس المشروع.")
+    st.stop()
+
+# 3. تحميل النموذج والمحول
 @st.cache_resource
-def load_model():
+def load_assets():
     try:
         model = joblib.load(MODEL_FILE)
         vectorizer = joblib.load(VECTORIZER_FILE)
         return model, vectorizer
     except Exception as e:
-        st.error(f"خطأ في تحميل النموذج: {e}")
-        return None, None
-
-# تحليل المشاعر
-def predict_sentiment(text, model, vectorizer):
-    text_vectorized = vectorizer.transform([text])
-    prediction = model.predict(text_vectorized)[0]
-    probability = model.predict_proba(text_vectorized)[0]
-    return prediction, probability
-
-def analyze_text_sentiment(text, model, vectorizer):
-    blob_sentiment = TextBlob(text).sentiment.polarity
-    ml_prediction, ml_proba = predict_sentiment(text, model, vectorizer)
-
-    return {
-        'text': text[:100] + '...' if len(text) > 100 else text,
-        'textblob_sentiment': blob_sentiment,
-        'ml_prediction': 'إيجابي' if ml_prediction == 1 else 'سلبي',
-        'ml_confidence': max(ml_proba),
-        'overall_sentiment': 'إيجابي' if (blob_sentiment > 0.1 and ml_prediction == 1) else 'سلبي'
-    }
-
-# الصفحة الرئيسية
-def main():
-    st.title("🧠 تحليل المشاعر للتقييمات")
-    st.markdown("---")
-
-    # تحميل البيانات والنموذج
-    df = load_data()
-    model, vectorizer = load_model()
-
-    if df is None or model is None:
+        st.error(f"خطأ في تحميل الملفات: {e}")
         st.stop()
 
-    # إحصائيات سريعة
-    col1, col2, col3, col4 = st.columns(4)
+model, vectorizer = load_assets()
 
-    with col1:
-        st.metric("عدد التقييمات", f"{len(df):,}")
+# 4. واجهة المستخدم
+user_input = st.text_area("أدخل مراجعتك هنا:", placeholder="مثال: This product is very good")
 
-    with col2:
-        avg_score = df['Score'].mean()
-        st.metric("متوسط التقييم", f"{avg_score:.2f}")
-
-    with col3:
-        positive_reviews = len(df[df['Score'] >= 4])
-        st.metric("التقييمات الإيجابية", f"{positive_reviews:,}")
-
-    with col4:
-        negative_reviews = len(df[df['Score'] < 4])
-        st.metric("التقييمات السلبية", f"{negative_reviews:,}")
-
-    st.markdown("---")
-
-    # تبويبات
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 التحليلات", "📈 الرسوم البيانية", "🔍 التنبؤ", "📋 عينات"])
-
-    with tab1:
-        st.header("تحليل البيانات الأساسي")
-
-        # توزيع التقييمات
-        st.subheader("توزيع التقييمات")
-        score_counts = df['Score'].value_counts().sort_index()
-        st.bar_chart(score_counts)
-
-        # إحصائيات مفصلة
-        st.subheader("إحصائيات مفصلة")
-        st.dataframe(df.describe())
-
-        # عينة من البيانات
-        st.subheader("عينة من التقييمات")
-        st.dataframe(df[['Score', 'Summary', 'Text']].head(10))
-
-    with tab2:
-        st.header("الرسوم البيانية التفاعلية")
-
-        # توزيع التقييمات
-        fig1 = px.histogram(df, x='Score', title='توزيع التقييمات')
-        st.plotly_chart(fig1)
-
-        # التقييمات حسب الوقت (إذا كان هناك عمود Time)
-        if 'Time' in df.columns:
-            df['Date'] = pd.to_datetime(df['Time'], unit='s')
-            df['Year'] = df['Date'].dt.year
-            yearly_counts = df.groupby('Year').size().reset_index(name='Count')
-
-            fig2 = px.line(yearly_counts, x='Year', y='Count', title='عدد التقييمات سنوياً')
-            st.plotly_chart(fig2)
-
-        # توزيع طول النصوص
-        df['Text_Length'] = df['Text'].str.len()
-        fig3 = px.histogram(df, x='Text_Length', title='توزيع طول النصوص')
-        st.plotly_chart(fig3)
-
-    with tab3:
-        st.header("تنبؤ بالمشاعر")
-
-        user_text = st.text_area("اكتب نص التقييم:", height=100)
-
-        if st.button("تحليل المشاعر", type="primary"):
-            if user_text.strip():
-                result = analyze_text_sentiment(user_text, model, vectorizer)
-
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    st.subheader("نتائج TextBlob")
-                    if result['textblob_sentiment'] > 0:
-                        st.success(f"إيجابي: {result['textblob_sentiment']:.3f}")
-                    elif result['textblob_sentiment'] < 0:
-                        st.error(f"سلبي: {result['textblob_sentiment']:.3f}")
-                    else:
-                        st.info(f"محايد: {result['textblob_sentiment']:.3f}")
-
-                with col2:
-                    st.subheader("نتائج الذكاء الاصطناعي")
-                    confidence = result['ml_confidence'] * 100
-                    if result['ml_prediction'] == 'إيجابي':
-                        st.success(f"{result['ml_prediction']} ({confidence:.1f}%)")
-                    else:
-                        st.error(f"{result['ml_prediction']} ({confidence:.1f}%)")
-
-                st.subheader("التقييم العام")
-                if result['overall_sentiment'] == 'إيجابي':
-                    st.success("🟢 التقييم العام: إيجابي")
-                else:
-                    st.error("🔴 التقييم العام: سلبي")
-
-            else:
-                st.warning("من فضلك اكتب نص للتحليل")
-
-    with tab4:
-        st.header("عينات من التقييمات")
-
-        # عينات إيجابية
-        st.subheader("عينات إيجابية")
-        positive_samples = df[df['Score'] >= 4][['Score', 'Summary', 'Text']].sample(5)
-        for _, row in positive_samples.iterrows():
-            with st.expander(f"⭐ {row['Score']} - {row['Summary'][:50]}..."):
-                st.write(row['Text'])
-
-        # عينات سلبية
-        st.subheader("عينات سلبية")
-        negative_samples = df[df['Score'] < 4][['Score', 'Summary', 'Text']].sample(5)
-        for _, row in negative_samples.iterrows():
-            with st.expander(f"⭐ {row['Score']} - {row['Summary'][:50]}..."):
-                st.write(row['Text'])
-
-if __name__ == "__main__":
-    main()
+if st.button("تحليل"):
+    if user_input:
+        # معالجة النص والتوقع
+        text_vector = vectorizer.transform([user_input])
+        prediction = model.predict(text_vector)[0]
+        probability = model.predict_proba(text_vector)[0]
+        
+        # عرض النتيجة بشكل جمالي
+        st.subheader("النتيجة:")
+        if prediction == 1:  # إيجابي
+            st.success(f"التقييم: إيجابي ✅ (ثقة: {max(probability):.1%})")
+        else:  # سلبي
+            st.error(f"التقييم: سلبي ❌ (ثقة: {max(probability):.1%})")
+        
+        # عرض التفاصيل
+        st.write(f"**النص المدخل:** {user_input}")
+        st.write(f"**الثقة في التنبؤ:** {max(probability):.1%}")
+    else:
+        st.warning("من فضلك اكتب نصاً أولاً!")
