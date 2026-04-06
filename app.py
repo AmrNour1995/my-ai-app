@@ -26,7 +26,6 @@ if not DATA_DIR.exists():
     else:
         st.error("❌ لم أجد مجلد مع الملفات المطلوبة")
         st.stop()
-
 MODEL_FILE = DATA_DIR / "sentiment_model.pkl"
 VECTORIZER_FILE = DATA_DIR / "tfidf_vectorizer.pkl"
 df = pd.read_csv("Reviews.csv")
