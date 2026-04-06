@@ -17,11 +17,11 @@ st.set_page_config(
 
 # تحديد المسارات
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR / "archive"
+DATA_DIR = SCRIPT_DIR / ""
 
-# إذا لم يوجد، جرب Desktop\archive
+# إذا لم يوجد، جرب Desktop\
 if not DATA_DIR.exists():
-    DESKTOP = Path.home() / "Desktop" / "archive"
+    DESKTOP = Path.home() / "Desktop" / ""
     if DESKTOP.exists():
         DATA_DIR = DESKTOP
     else:
