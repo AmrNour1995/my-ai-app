@@ -1,3 +1,6 @@
 streamlit
 joblib
 scikit-learn
+matplotlib
+pandas
+textblob
