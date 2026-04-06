@@ -17,21 +17,19 @@ st.set_page_config(
 
 # تحديد المسارات
 SCRIPT_DIR = Path(__file__).resolve().parent
-DATA_DIR = SCRIPT_DIR / ""
-
+DATA_DIR = SCRIPT_DIR
 # إذا لم يوجد، جرب Desktop\
 if not DATA_DIR.exists():
     DESKTOP = Path.home() / "Desktop" / ""
     if DESKTOP.exists():
         DATA_DIR = DESKTOP
     else:
-        st.error("❌ لم أجد مجلد archive مع الملفات المطلوبة")
+        st.error("❌ لم أجد مجلد مع الملفات المطلوبة")
         st.stop()
 
 MODEL_FILE = DATA_DIR / "sentiment_model.pkl"
 VECTORIZER_FILE = DATA_DIR / "tfidf_vectorizer.pkl"
-DATA_FILE = DATA_DIR / "Reviews.csv"
-
+df = pd.read_csv("Reviews.csv")
 # تحميل البيانات والنموذج
 @st.cache_data
 def load_data():
