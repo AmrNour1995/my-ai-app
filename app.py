@@ -1,11 +1,13 @@
+import re
 import streamlit as st
 import joblib
 from pathlib import Path
+from textblob import TextBlob
 
 # 1. إعداد عنوان الصفحة
 st.set_page_config(page_title="محلل مشاعر المراجعات", page_icon="📊")
 st.title("🤖 نظام تحليل المشاعر الذكي")
-st.markdown("أدخل نص التقييم بالإنجليزية وسيقوم النموذج بتوقعه!")
+st.markdown("أدخل نص التقييم بالإنجليزية أو العربية، وسيقوم النموذج بتحليل المشاعر بطريقته الأفضل.")
 
 # 2. تحديد مسار الملفات
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -16,18 +18,13 @@ POSSIBLE_DIRS = [
     Path.cwd() / "archive",
 ]
 
-# دالة لاختيار الملف من أي مسار متاح
 def find_asset(filename):
     tried = []
-
-    # المسارات المباشرة المفترضة
     for folder in POSSIBLE_DIRS:
         path = folder / filename
         tried.append(path)
         if path.exists():
             return path, tried
-
-    # البحث في المجلدات الوالدية
     for root in [SCRIPT_DIR, Path.cwd()]:
         for parent in [root] + list(root.parents):
             path = parent / filename
@@ -38,14 +35,11 @@ def find_asset(filename):
             tried.append(archive_path)
             if archive_path.exists():
                 return archive_path, tried
-
-    # البحث في أي مكان داخل المشروع
     for folder in [SCRIPT_DIR, Path.cwd()]:
         for path in folder.rglob(filename):
             tried.append(path)
             if path.exists():
                 return path, tried
-
     return None, tried
 
 MODEL_FILE, model_tried = find_asset("sentiment_model.pkl")
@@ -88,25 +82,116 @@ def load_assets():
 
 model, vectorizer = load_assets()
 
-# 4. واجهة المستخدم
+# 4. قوائم الكلمات السلبية
+NEGATIVE_ARABIC_KEYWORDS = [
+    "سيئ", "خدمة سيئة", "مزعج", "أسوأ", "مستاء", "مشكلة", "قرف", "سيئة",
+    "مستحيل", "ضعيف", "غير جيد", "حزين", "كراهية", "سلبي", "ليس جيد",
+    "لا ينصح", "ما عجبني", "أبداً", "مش حلو", "مش كويس", "وحش", "بايخ",
+    "مش تمام", "زفت", "مش عاجبني"
+]
+
+NEGATIVE_ENGLISH_KEYWORDS = [
+    "bad", "terrible", "awful", "horrible", "worst", "poor", "disgusting",
+    "hate", "useless", "disappointing", "not good", "not great", "waste",
+    "broken", "pathetic", "garbage", "trash", "mediocre", "annoying"
+]
+
+POSITIVE_THRESHOLD = 0.65  # الموديل لازم يكون واثق 65%+ عشان يقول إيجابي
+
+# 5. دوال التنبؤ والتحليل
+def predict_with_model(text):
+    text_vector = vectorizer.transform([text])
+    prediction = model.predict(text_vector)[0]
+    probability = model.predict_proba(text_vector)[0]
+    return prediction, probability
+
+def analyze_sentiment(text):
+    text_lower = text.lower().strip()
+    blob_score = TextBlob(text).sentiment.polarity
+
+    # --- الأولوية 1: فحص الكلمات السلبية (عربي + إنجليزي) ---
+    arabic_negative = any(kw in text_lower for kw in NEGATIVE_ARABIC_KEYWORDS)
+    english_negative = any(kw in text_lower for kw in NEGATIVE_ENGLISH_KEYWORDS)
+
+    if arabic_negative or english_negative:
+        return {
+            'method': 'Keyword Rule',
+            'prediction': 'سلبي',
+            'confidence': 0.90,
+            'blob_score': blob_score,
+            'from_model': False,
+        }
+
+    # --- الأولوية 2: TextBlob واثق بوضوح أن النص سلبي ---
+    if blob_score <= -0.1:
+        return {
+            'method': 'TextBlob',
+            'prediction': 'سلبي',
+            'confidence': min(0.5 + abs(blob_score), 0.99),
+            'blob_score': blob_score,
+            'from_model': False,
+        }
+
+    # --- الأولوية 3: TextBlob إيجابي → نتأكد بالموديل ---
+    if blob_score >= 0.1:
+        ml_prediction, ml_proba = predict_with_model(text)
+        pos_prob = ml_proba[1] if len(ml_proba) > 1 else ml_proba[0]
+
+        if ml_prediction == 1 and pos_prob >= POSITIVE_THRESHOLD:
+            return {
+                'method': 'TextBlob + Model',
+                'prediction': 'إيجابي',
+                'confidence': pos_prob,
+                'blob_score': blob_score,
+                'from_model': True,
+            }
+        else:
+            # TextBlob إيجابي لكن الموديل مش واثق → نثق بـ TextBlob
+            return {
+                'method': 'TextBlob',
+                'prediction': 'إيجابي',
+                'confidence': min(0.5 + blob_score, 0.99),
+                'blob_score': blob_score,
+                'from_model': False,
+            }
+
+    # --- الأولوية 4: النص محايد → نعتمد على الموديل فقط ---
+    ml_prediction, ml_proba = predict_with_model(text)
+    pos_prob = ml_proba[1] if len(ml_proba) > 1 else ml_proba[0]
+
+    if pos_prob < POSITIVE_THRESHOLD:
+        return {
+            'method': 'Model (uncertain → negative)',
+            'prediction': 'سلبي',
+            'confidence': 1 - pos_prob,
+            'blob_score': blob_score,
+            'from_model': True,
+        }
+
+    return {
+        'method': 'Model',
+        'prediction': 'إيجابي',
+        'confidence': pos_prob,
+        'blob_score': blob_score,
+        'from_model': True,
+    }
+
+# 6. واجهة المستخدم
 user_input = st.text_area("أدخل مراجعتك هنا:", placeholder="مثال: This product is very good")
 
 if st.button("تحليل"):
     if user_input:
-        # معالجة النص والتوقع
-        text_vector = vectorizer.transform([user_input])
-        prediction = model.predict(text_vector)[0]
-        probability = model.predict_proba(text_vector)[0]
-        
-        # عرض النتيجة بشكل جمالي
+        result = analyze_sentiment(user_input)
+
         st.subheader("النتيجة:")
-        if prediction == 1:  # إيجابي
-            st.success(f"التقييم: إيجابي ✅ (ثقة: {max(probability):.1%})")
-        else:  # سلبي
-            st.error(f"التقييم: سلبي ❌ (ثقة: {max(probability):.1%})")
-        
-        # عرض التفاصيل
+        if result['prediction'] == 'إيجابي':
+            st.success(f"التقييم: إيجابي ✅ (ثقة: {result['confidence']:.1%})")
+        else:
+            st.error(f"التقييم: سلبي ❌ (ثقة: {result['confidence']:.1%})")
+
         st.write(f"**النص المدخل:** {user_input}")
-        st.write(f"**الثقة في التنبؤ:** {max(probability):.1%}")
+        st.write(f"**طريقة التقييم:** {result['method']}")
+        st.write(f"**درجة TextBlob:** {result['blob_score']:.3f}")
+        st.write(f"**الثقة:** {result['confidence']:.1%}")
     else:
         st.warning("من فضلك اكتب نصاً أولاً!")
