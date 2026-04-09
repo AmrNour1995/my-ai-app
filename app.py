@@ -1,197 +1,129 @@
-import re
-import streamlit as st
+import pandas as pd
 import joblib
-from pathlib import Path
-from textblob import TextBlob
+import re
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# 1. إعداد عنوان الصفحة
-st.set_page_config(page_title="محلل مشاعر المراجعات", page_icon="📊")
-st.title("🤖 نظام تحليل المشاعر الذكي")
-st.markdown("أدخل نص التقييم بالإنجليزية أو العربية، وسيقوم النموذج بتحليل المشاعر بطريقته الأفضل.")
+# ============================================================
+# ⚙️ الإعدادات
+# ============================================================
+CSV_PATH     = "data.csv"
+TEXT_COLUMN  = "Text"
+LABEL_COLUMN = "Score"
+# ============================================================
 
-# 2. تحديد مسار الملفات
-SCRIPT_DIR = Path(__file__).resolve().parent
-POSSIBLE_DIRS = [
-    SCRIPT_DIR,
-    SCRIPT_DIR / "archive",
-    Path.cwd(),
-    Path.cwd() / "archive",
+
+# 1. تحميل البيانات
+df = pd.read_csv(CSV_PATH)
+print("✅ تم تحميل البيانات")
+print(f"   الحجم الكلي: {df.shape}\n")
+
+# 2. الأعمدة المطلوبة فقط
+df = df[[TEXT_COLUMN, LABEL_COLUMN]].dropna()
+df[TEXT_COLUMN]  = df[TEXT_COLUMN].astype(str).str.strip()
+df[LABEL_COLUMN] = df[LABEL_COLUMN].astype(int)
+
+# 3. حذف الـ Score = 3 (محايد)
+df = df[df[LABEL_COLUMN] != 3]
+print(f"   بعد حذف المحايد (Score=3): {df.shape}\n")
+
+# 4. تحويل Score لـ 0 و 1
+df["label_encoded"] = df[LABEL_COLUMN].apply(
+    lambda x: 1 if x >= 4 else 0
+)
+
+# 5. فحص التوزيع
+print("📊 توزيع البيانات:")
+counts = df["label_encoded"].value_counts()
+print(f"   إيجابي (1): {counts.get(1, 0):,}  ({counts.get(1, 0)/len(df)*100:.1f}%)")
+print(f"   سلبي   (0): {counts.get(0, 0):,}  ({counts.get(0, 0)/len(df)*100:.1f}%)\n")
+
+X = df[TEXT_COLUMN]
+y = df["label_encoded"]
+
+# 6. تنظيف النصوص
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r"http\S+|www\S+", "", text)
+    text = re.sub(r"[^a-zA-Z\u0600-\u06FF\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+X = X.apply(clean_text)
+
+# 7. تقسيم البيانات
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y,
+    test_size=0.2,
+    random_state=42,
+    stratify=y
+)
+print(f"✅ التقسيم: {len(X_train):,} تدريب | {len(X_test):,} اختبار\n")
+
+# 8. TF-IDF
+vectorizer = TfidfVectorizer(
+    max_features=10000,
+    ngram_range=(1, 2),
+    min_df=2,
+    sublinear_tf=True
+)
+
+X_train_vec = vectorizer.fit_transform(X_train)
+X_test_vec  = vectorizer.transform(X_test)
+
+# 9. تدريب الموديل
+model = LogisticRegression(
+    class_weight='balanced',
+    max_iter=1000,
+    C=1.0,
+    solver='lbfgs'
+)
+
+model.fit(X_train_vec, y_train)
+print("✅ تم تدريب الموديل\n")
+
+# 10. تقييم الموديل
+y_pred = model.predict(X_test_vec)
+
+print("📈 تقرير الأداء:")
+print(classification_report(y_test, y_pred, target_names=["سلبي (1-2)", "إيجابي (4-5)"]))
+
+# 11. Confusion Matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=["سلبي", "إيجابي"],
+            yticklabels=["سلبي", "إيجابي"])
+plt.title("Confusion Matrix")
+plt.ylabel("الحقيقي")
+plt.xlabel("المتوقع")
+plt.tight_layout()
+plt.savefig("confusion_matrix.png")
+plt.show()
+
+# 12. حفظ الموديل
+joblib.dump(model,      "sentiment_model.pkl")
+joblib.dump(vectorizer, "tfidf_vectorizer.pkl")
+print("\n✅ تم حفظ sentiment_model.pkl")
+print("✅ تم حفظ tfidf_vectorizer.pkl")
+
+# 13. اختبار سريع
+print("\n🧪 اختبار سريع:")
+test_samples = [
+    "This product is amazing and works perfectly",
+    "This is the worst product I have ever bought",
+    "Terrible quality, complete waste of money",
+    "Absolutely love it, highly recommend",
+    "garbage",
+    "disgusting smell and bad taste",
 ]
-
-def find_asset(filename):
-    tried = []
-    for folder in POSSIBLE_DIRS:
-        path = folder / filename
-        tried.append(path)
-        if path.exists():
-            return path, tried
-    for root in [SCRIPT_DIR, Path.cwd()]:
-        for parent in [root] + list(root.parents):
-            path = parent / filename
-            tried.append(path)
-            if path.exists():
-                return path, tried
-            archive_path = parent / "archive" / filename
-            tried.append(archive_path)
-            if archive_path.exists():
-                return archive_path, tried
-    for folder in [SCRIPT_DIR, Path.cwd()]:
-        for path in folder.rglob(filename):
-            tried.append(path)
-            if path.exists():
-                return path, tried
-    return None, tried
-
-MODEL_FILE, model_tried = find_asset("sentiment_model.pkl")
-VECTORIZER_FILE, vectorizer_tried = find_asset("tfidf_vectorizer.pkl")
-
-missing_files = []
-if MODEL_FILE is None:
-    missing_files.append("sentiment_model.pkl")
-if VECTORIZER_FILE is None:
-    missing_files.append("tfidf_vectorizer.pkl")
-
-if missing_files:
-    st.error("❌ لم أجد الملفات التالية:")
-    for name in missing_files:
-        st.write(f"- {name}")
-    st.write("\n**المسارات التي تم البحث فيها:**")
-    all_tried = []
-    if MODEL_FILE is None:
-        all_tried += model_tried
-    if VECTORIZER_FILE is None:
-        all_tried += vectorizer_tried
-    for path in all_tried:
-        st.write(f"- {path}")
-    st.write("\n**المسار الحالي للسكريبت:**")
-    st.write(f"- SCRIPT_DIR = {SCRIPT_DIR}")
-    st.write(f"- Path.cwd() = {Path.cwd()}")
-    st.write("\nتأكد من رفع هذه الملفات إلى نفس مجلد `app.py` أو إلى مجلد `archive` داخل نفس المشروع.")
-    st.stop()
-
-# 3. تحميل النموذج والمحول
-@st.cache_resource
-def load_assets():
-    try:
-        model = joblib.load(MODEL_FILE)
-        vectorizer = joblib.load(VECTORIZER_FILE)
-        return model, vectorizer
-    except Exception as e:
-        st.error(f"خطأ في تحميل الملفات: {e}")
-        st.stop()
-
-model, vectorizer = load_assets()
-
-# 4. قوائم الكلمات السلبية
-NEGATIVE_ARABIC_KEYWORDS = [
-    "سيئ", "خدمة سيئة", "مزعج", "أسوأ", "مستاء", "مشكلة", "قرف", "سيئة",
-    "مستحيل", "ضعيف", "غير جيد", "حزين", "كراهية", "سلبي", "ليس جيد",
-    "لا ينصح", "ما عجبني", "أبداً", "مش حلو", "مش كويس", "وحش", "بايخ",
-    "مش تمام", "زفت", "مش عاجبني"
-]
-
-NEGATIVE_ENGLISH_KEYWORDS = [
-    "bad", "terrible", "awful", "horrible", "worst", "poor", "disgusting",
-    "hate", "useless", "disappointing", "not good", "not great", "waste",
-    "broken", "pathetic", "garbage", "trash", "mediocre", "annoying"
-]
-
-POSITIVE_THRESHOLD = 0.65  # الموديل لازم يكون واثق 65%+ عشان يقول إيجابي
-
-# 5. دوال التنبؤ والتحليل
-def predict_with_model(text):
-    text_vector = vectorizer.transform([text])
-    prediction = model.predict(text_vector)[0]
-    probability = model.predict_proba(text_vector)[0]
-    return prediction, probability
-
-def analyze_sentiment(text):
-    text_lower = text.lower().strip()
-    blob_score = TextBlob(text).sentiment.polarity
-
-    # --- الأولوية 1: فحص الكلمات السلبية (عربي + إنجليزي) ---
-    arabic_negative = any(kw in text_lower for kw in NEGATIVE_ARABIC_KEYWORDS)
-    english_negative = any(kw in text_lower for kw in NEGATIVE_ENGLISH_KEYWORDS)
-
-    if arabic_negative or english_negative:
-        return {
-            'method': 'Keyword Rule',
-            'prediction': 'سلبي',
-            'confidence': 0.90,
-            'blob_score': blob_score,
-            'from_model': False,
-        }
-
-    # --- الأولوية 2: TextBlob واثق بوضوح أن النص سلبي ---
-    if blob_score <= -0.1:
-        return {
-            'method': 'TextBlob',
-            'prediction': 'سلبي',
-            'confidence': min(0.5 + abs(blob_score), 0.99),
-            'blob_score': blob_score,
-            'from_model': False,
-        }
-
-    # --- الأولوية 3: TextBlob إيجابي → نتأكد بالموديل ---
-    if blob_score >= 0.1:
-        ml_prediction, ml_proba = predict_with_model(text)
-        pos_prob = ml_proba[1] if len(ml_proba) > 1 else ml_proba[0]
-
-        if ml_prediction == 1 and pos_prob >= POSITIVE_THRESHOLD:
-            return {
-                'method': 'TextBlob + Model',
-                'prediction': 'إيجابي',
-                'confidence': pos_prob,
-                'blob_score': blob_score,
-                'from_model': True,
-            }
-        else:
-            # TextBlob إيجابي لكن الموديل مش واثق → نثق بـ TextBlob
-            return {
-                'method': 'TextBlob',
-                'prediction': 'إيجابي',
-                'confidence': min(0.5 + blob_score, 0.99),
-                'blob_score': blob_score,
-                'from_model': False,
-            }
-
-    # --- الأولوية 4: النص محايد → نعتمد على الموديل فقط ---
-    ml_prediction, ml_proba = predict_with_model(text)
-    pos_prob = ml_proba[1] if len(ml_proba) > 1 else ml_proba[0]
-
-    if pos_prob < POSITIVE_THRESHOLD:
-        return {
-            'method': 'Model (uncertain → negative)',
-            'prediction': 'سلبي',
-            'confidence': 1 - pos_prob,
-            'blob_score': blob_score,
-            'from_model': True,
-        }
-
-    return {
-        'method': 'Model',
-        'prediction': 'إيجابي',
-        'confidence': pos_prob,
-        'blob_score': blob_score,
-        'from_model': True,
-    }
-
-# 6. واجهة المستخدم
-user_input = st.text_area("أدخل مراجعتك هنا:", placeholder="مثال: This product is very good")
-
-if st.button("تحليل"):
-    if user_input:
-        result = analyze_sentiment(user_input)
-
-        st.subheader("النتيجة:")
-        if result['prediction'] == 'إيجابي':
-            st.success(f"التقييم: إيجابي ✅ (ثقة: {result['confidence']:.1%})")
-        else:
-            st.error(f"التقييم: سلبي ❌ (ثقة: {result['confidence']:.1%})")
-
-        st.write(f"**النص المدخل:** {user_input}")
-        st.write(f"**طريقة التقييم:** {result['method']}")
-        st.write(f"**درجة TextBlob:** {result['blob_score']:.3f}")
-        st.write(f"**الثقة:** {result['confidence']:.1%}")
-    else:
-        st.warning("من فضلك اكتب نصاً أولاً!")
+for sample in test_samples:
+    vec   = vectorizer.transform([clean_text(sample)])
+    pred  = model.predict(vec)[0]
+    proba = model.predict_proba(vec)[0]
+    label = "إيجابي ✅" if pred == 1 else "سلبي ❌"
+    print(f"   '{sample}' → {label} (ثقة: {max(proba):.1%})")
